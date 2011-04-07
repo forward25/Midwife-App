@@ -1,0 +1,261 @@
+<html>
+    <head>
+        <script type='text/javascript' src='https://www.google.com/jsapi'></script>
+        <script type='text/javascript'>
+            google.load("jquery", "1.5.2");
+            google.load('visualization', '1', {packages:['geomap']});
+            google.setOnLoadCallback(drawVisualization);
+            var friend_count = 0;
+            var friend_ids = new Array();
+            var name = "";
+			var access_token;
+			var babyDeaths = 0;
+            var mummyDeaths = 0;
+			var country_name = '';
+			var mummyDeathsPer = 0;
+			var babyDeathsPer = 0;
+            function drawVisualization() {
+                //auth with facebook
+                FB.init({appId: '215359871811504', apiKey:'fe16e8696c59ccfad53c70a51df4a079', status: true, cookie: true, xfbml: true});
+                
+                FB.login(function (response) {
+                    if (response.session) {
+                        access_token = response.session.access_token;
+                    } else {
+                        alert('User is logged out');
+                    }
+                });
+                //get friends list
+                FB.api({
+                    method: 'fql.query',
+                    query: 'SELECT uid,pic_square,name FROM user WHERE uid IN (SELECT uid2 FROM friend WHERE uid1=me())'
+                }, function(response) {
+                    $.each(response, function(json) {
+                        friend_count++;
+                        friend_ids[json] = [response[json].pic_square, response[json].name]
+                    });
+                });
+                //get user's name
+                FB.api('/me', function(response) {
+                    name = response.name;
+                });
+                //request spreadsheet
+                var query = new google.visualization.Query('https://spreadsheets.google.com/ccc?key=0ApT3nLwQu_ugdFZEZHRRUnBfUUZwQ0U4RzZiRy1RckE&hl=en');
+                query.send(handleQueryResponse);
+            }
+            function handleQueryResponse(response) {
+                //draw world map
+                var data = response.getDataTable();
+                visualization = new google.visualization.GeoMap(document.getElementById('visualization'));
+                var visualization2; //built later
+                var options = {};
+                options['dataMode'] = 'regions';
+                options['width'] = 725;
+                options['height'] = 600;
+                options['colors'] = [0x00FF00,0x00FF00, 0x00FF00, 0x0];
+                google.visualization.events.addListener(visualization, 'drawingDone', function(region) {
+                    setTimeout(function(){
+                        $("#help").html('<h1>Select a country</h1>');
+                        $("#visualization").css('z-index', '0');
+                        $("#visualization2").css('z-index', '1');
+                    }, 2000);
+                });
+                visualization.draw(data, options);
+                //render zoomed in region above
+                google.visualization.events.addListener(visualization, 'regionClick', function(region) {
+                    //ping the ushahidi server to record interest in selected regions
+                    pingUshahidi(region.region);
+					//zoom in                    
+					options['region'] = region.region;
+                    visualization2 = new google.visualization.GeoMap(document.getElementById('visualization2'));
+                    google.visualization.events.addListener(visualization2,'drawingDone', function(){
+                        $("#help").html('<h1>Loading...</h1>');
+                        setTimeout(function(){
+                            $("#visualization").css('z-index', '0');
+                            $("#visualization2").css('z-index', '1');
+                            $("#help").html('');
+                        }, 2000);
+                    });
+                    options['showZoomOut'] = true;
+                    visualization2.draw(data, options);
+                    //zoom out handler
+                    google.visualization.events.addListener(visualization2, 'zoomOut', function() {
+                        $("#visualization").css('z-index', '1');
+                        $("#visualization2").css('z-index', '0');
+                        $("#animation").html('');
+                        $("#animation").css('z-index', '-1');
+                        $("#doyouagree").css('z-index', '-2');
+                    });
+                    //region click for side regions
+                    google.visualization.events.addListener(visualization2, 'regionClick', function(region) {
+                        options['region'] = region.region;
+                        visualization2.draw(data, options);
+                        //ping the ushahidi server to record interest in selected regions
+                        pingUshahidi(region.region);
+
+                    });
+                });
+                //do the animation
+                google.visualization.events.addListener(visualization, 'select', function() {
+                    visualization2.setSelection(visualization.getSelection());////////////////////
+                    //query spreadsheet for stats
+                    country_name = data.D[visualization.getSelection()[0].row].c[0].v;                    
+                    $.ajax({
+                        url: 'https://spreadsheets.google.com/feeds/list/0ApT3nLwQu_ugdFNFOGRIN3NOZy1VMVlOUjNZbFBjMXc/od6/public/values',
+                        type: 'GET',
+                        dataType: 'jsonp',
+                        data: 'alt=json-in-script&sq=country=='+country_name,
+                        jsonpCallback: 'myCallback',
+                        success: function(msg) {
+                            mummyDeathsPer = msg.feed.entry[0].gsx$maternaldeathsper100000births.$t;
+                            babyDeathsPer = msg.feed.entry[0].gsx$neonatalperthousand.$t;
+                            mummyDeaths = (mummyDeathsPer / 100000) * friend_count;
+                            babyDeaths = (babyDeathsPer / 1000) * friend_count;
+							//place pics inside
+							$("#animation").css('z-index', '3');
+							$("#doyouagree").css('z-index', '4');
+							$.each(friend_ids, function(iterator) {
+								$("#animation").append("<div style='display:inline;width:32px;height:32px;'><div style='float:left;width:30;height:"+(Math.random()*8)+"'></div><img style='padding:0;margin-left:"+(Math.random()*8)+"' width='20' height='20' alt='"+friend_ids[iterator][1].toString()+"' src='" + friend_ids[iterator][0].toString() + "'/></div>");
+								if(iterator == 324) return false;
+							});
+							//fade the right number of friends to dead.png - representing baby deaths
+							setTimeout(function() {                        
+								var x = 0;
+								var y= 0;						
+								$("#doyouagree").html('<h3>Neo-natal Deaths</h3><p>'+babyDeathsPer+' babies die in '+country_name+' per one thousand births.</p>');						
+								$('#animation img').each(function(index) {
+									if(x>30) {
+										if (y<babyDeaths){
+											$(this).fadeTo(3000, 0.2,function(){
+												$(this).attr("src", "dead2.jpg");
+												$(this).fadeTo(3000, 1);
+											});y++;
+										}
+									}x++;
+								});
+							}, 3000);//this can be called from text div
+							//fade the right number of friends to unhappy.png - representing baby deaths
+							setTimeout(function() {
+								//var fadeFriendGap = friend_count/mummyDeaths;
+								var x = 0;
+								var y = 0;
+								$("#doyouagree").html('<h3>Maternal Deaths</h3><p>'+mummyDeathsPer+' mothers die in '+country_name+' per 100 thousand births.</p>');
+								$('#animation img').each(function(index) {
+									if(x>10) {
+										if (y < mummyDeaths){
+											$(this).fadeTo(3000, 0.2,function(){
+												$(this).attr("src", "rip.jpg");
+												$(this).fadeTo(3000, 1);
+											});
+											y++;
+										}
+									}x++;
+								});
+							}, 10000);//this can be called from text div					
+							//fade to 3rd stage like and links
+							setTimeout(function() {
+								$("#doyouagree").html('<h3>What can you do about it?</h3><p><center><a href="javascript:fb_publish();return false;"><img src="agree.gif" border="0"/></a><a href="http://www.unfpa.org/public/">UNFPA</a><br><a href="http://www.unfoundation.org/our-solutions/mobile-technology/">&nbsp;Unfoundation</a><br><a href="http://www.facebook.com/pages/UNFPA-United-Nations-Population-Fund/16322678622">UNFPA Facebook</a><br><a href="http://www.oxfam.org.uk/get_involved/campaign/health_and_education/maternal_mortality_slideshow.html">OXFAM</a></center></p>');
+							
+							
+							
+							
+							}, 17000);//this can be called from text div
+							$("#doyouagree").html(''); 							
+                        }
+                    });                                    
+                });
+                function pingUshahidi(region){
+                    $.ajax({
+                        url: 'mdganalysis.org/ushahidi/collectfbreports.php',
+                        type: 'GET',
+                        data: 'location='+region+'&name='+name,
+                        jsonpCallback: 'myCallback',
+                        success: function(msg) {
+                            //                            alert("lol");
+                            //                            alert(msg);
+                        }
+                    });
+                }				
+            }
+			function fb_publish() {
+					FB.ui(
+					{
+						method: 'stream.publish',
+						message: '',
+						attachment: {
+							name: name,
+							caption: name+' Has seen the state of the world.',
+							href: 'http://apps.facebook.com/stateoftheworld'
+						},
+						action_links: [
+							{ text: 'See more here', href: 'mdganalysis.org/ushahidi' }
+						],
+						user_prompt_message: 'Personal message here'
+					},
+					function(response) {
+						if (response && response.post_id) {
+						alert('Post was published.');
+						} else {
+							alert('Post was not published.');
+						}
+					}
+					);  
+				}
+        </script>
+    </head>
+    <style type="text/css">/* .box div holds the bottom image */
+
+
+        .box {
+
+            background: url(boxBottom.jpg);
+            background-repeat: no-repeat;
+            background-attachment: scroll left bottom;
+            background-position: left bottom;
+            margin-bottom: 10px;
+            padding: 0 0 15px;
+            width: 250px;
+        }
+
+        /*  this is the title h3 tag and contains the background
+            image for the title	*/
+
+        .box h3 {
+
+            background: url(box.jpg) repeat scroll 0 0;
+            color: #000;
+            font-size: 17px;
+            height: 35px;
+            line-height: 30px;
+            margin: 0;
+            padding: 0 15px;
+
+        }
+
+        /* The paragraph tag contains the side borders mark-up */
+
+        .box p {
+
+            background: #ffffff none repeat scroll 0 0;
+            border-color: #CCC;
+            border-width: 0 1px;
+            border-style: solid;
+            color: #444444;
+            font-size: 30px;
+            line-height: 1.3em;
+            margin: 0;
+            padding: 15px 14px 0;
+            width: 220px;
+        }
+    </style>
+
+    <body>
+        <div id="fb-root"></div>
+        <script src="http://connect.facebook.net/en_US/all.js"></script>
+        <div id="doyouagree" class="box" style="margin-left:50px;margin-top:120px;position: absolute;height:250px;background-color:white;z-index: -2; "></div>
+        <div id="animation" style="position:absolute;z-index:-1;margin-left:45px;margin-top:35px;width:635px;height:550px"></div>
+        <div id="help" style="position:absolute;z-index:2;margin-top:20"><h1>Loading Map..</h1></div>
+        <div id="visualization" style="position:absolute;z-index:1;height:603px"></div>
+        <div id="visualization2" style="position:absolute;z-index:0"></div>
+    </body>
+</html>
